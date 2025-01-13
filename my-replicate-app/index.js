@@ -17,7 +17,9 @@ const replicate = new Replicate({
 });
 
 // Define the Stable Diffusion Model
-const model = "stability-ai/stable-diffusion-img2img:15a3689ee13b0d2616e98820eca31d4c3abcd36672df6afce5cb6feb1d66087d";
+// const model = "stability-ai/stable-diffusion-img2img:15a3689ee13b0d2616e98820eca31d4c3abcd36672df6afce5cb6feb1d66087d";
+
+const model = "stability-ai/stable-diffusion-3.5-large-turbo";
 
 // Initialize Express App
 const app = express();
@@ -52,16 +54,25 @@ app.post("/generate", async (req, res) => {
         // However, for demonstration purposes, we'll assume Replicate can accept the image as a buffer.
 
         // Prepare inputs for Replicate API
+        // const inputs = {
+        //     prompt: prompt,
+        //     image: image, // Passing the data URL directly
+        //     width: 512,
+        //     height: 512,
+        //     scheduler: "DPMSolverMultistep",
+        //     num_outputs: 1,
+        //     guidance_scale: 8,
+        //     prompt_strength: 0.75,
+        //     num_inference_steps: 50,
+        // };
+
         const inputs = {
             prompt: prompt,
             image: image, // Passing the data URL directly
-            width: 512,
-            height: 512,
-            scheduler: "DPMSolverMultistep",
-            num_outputs: 1,
-            guidance_scale: 7.5,
-            prompt_strength: 0.65,
-            num_inference_steps: 25,
+            steps: 10,
+            output_format: "png",
+            prompt_strength: 0.85,
+            cfg: 7,
         };
 
         console.log("Calling Replicate API with inputs:", inputs);
