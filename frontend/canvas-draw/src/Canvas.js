@@ -4,6 +4,7 @@ import { Camera } from "@mediapipe/camera_utils";
 
 function Canvas({ setGeneratedImage }) {
     const canvasRef = useRef(null);
+    const overlayCanvasRef = useRef(null);
     const videoRef = useRef(null);
 
     // State to track input mode: 'mouse' or 'hand'
@@ -15,13 +16,46 @@ function Canvas({ setGeneratedImage }) {
     // Separate states for mouse drawing
     const [mouseIsDrawing, setMouseIsDrawing] = useState(false);
     const [mouseLastPosition, setMouseLastPosition] = useState(null);
+    let selectingColor = false;
 
     // Refs for hand drawing
     const handIsDrawingRef = useRef(false);
     const handLastPositionRef = useRef(null);
 
     const [brushSize, setBrushSize] = useState(5);
+    const brushSizeRef = useRef(brushSize);
+    useEffect(() => {
+        brushSizeRef.current = brushSize;
+    }, [brushSize]);
+
     const [color, setColor] = useState("#000000");
+
+    const colorRef = useRef(color);
+    useEffect(() => {
+        colorRef.current = color;
+    }, [color]);
+
+    const [displayColor, setDisplayColor] = useState("#000000");
+
+    // Color Palette
+    const colorPalette = [
+        "#000000", // Black
+        "#FF0000", // Red
+        "#00FF00", // Green
+        "#0000FF", // Blue
+        "#FFFF00", // Yellow
+        "#FF00FF", // Magenta
+        "#00FFFF", // Cyan
+        "#FFFFFF", // White
+    ];
+    const [currentColorIndex, setCurrentColorIndex] = useState(0);
+
+    // Current color based on palette
+    useEffect(() => {
+        setColor(colorPalette[currentColorIndex]);
+        setDisplayColor(colorPalette[currentColorIndex]);
+    }, [currentColorIndex]);
+
     const [isEraser, setIsEraser] = useState(false);
 
     // State to track number of hands detected
@@ -29,6 +63,9 @@ function Canvas({ setGeneratedImage }) {
 
     // State for the prompt input
     const [prompt, setPrompt] = useState("");
+    const [isListening, setIsListening] = useState(false);
+    const recognition =
+        typeof window !== "undefined" && "webkitSpeechRecognition" in window ? new window.webkitSpeechRecognition() : null;
 
     // State for submission status
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -81,6 +118,97 @@ function Canvas({ setGeneratedImage }) {
         loadHands();
     }, []);
 
+    const isHandOpen = (handLandmarks) => {
+        // For index, middle, ring, and pinky fingers:
+        // Check if the tip is above the PIP joint (y-coordinate is smaller)
+        const indexOpen = handLandmarks[8].y < handLandmarks[6].y;
+        const middleOpen = handLandmarks[12].y < handLandmarks[10].y;
+        const ringOpen = handLandmarks[16].y < handLandmarks[14].y;
+        const pinkyOpen = handLandmarks[20].y < handLandmarks[18].y;
+
+        // For the thumb:
+        // Determine if the thumb is extended outwards.
+        // This can vary based on hand orientation, but a basic check can be:
+        // If the thumb tip is to the left of the IP joint for the left hand
+        // or to the right for the right hand. Adjust based on your canvas mirroring.
+
+        // Assume you have handedness information; if not, you might need to infer it.
+        // For simplicity, let's assume all hands are facing the same direction.
+        const thumbOpen = Math.abs(handLandmarks[4].x - handLandmarks[3].x) > 0.02; // Adjust threshold as needed
+
+        return indexOpen && middleOpen && ringOpen && pinkyOpen && thumbOpen;
+    };
+
+    const isThumbsUp = (handLandmarks) => {
+        // Ensure there are enough landmarks
+        if (!handLandmarks || handLandmarks.length < 21) return false;
+
+        // Thumb: Check if the thumb tip is above the IP joint (indicating it's extended upwards)
+        const thumbTipY = handLandmarks[4].y;
+        const thumbIPY = handLandmarks[3].y;
+        const thumbUp = thumbTipY < thumbIPY;
+
+        // Index Finger: Folded (tip below PIP joint)
+        const indexTipY = handLandmarks[8].y;
+        const indexPIPY = handLandmarks[6].y;
+        const indexFolded = indexTipY > indexPIPY;
+
+        // Middle Finger: Folded
+        const middleTipY = handLandmarks[12].y;
+        const middlePIPY = handLandmarks[10].y;
+        const middleFolded = middleTipY > middlePIPY;
+
+        // Ring Finger: Folded
+        const ringTipY = handLandmarks[16].y;
+        const ringPIPY = handLandmarks[14].y;
+        const ringFolded = ringTipY > ringPIPY;
+
+        // Pinky Finger: Folded
+        const pinkyTipY = handLandmarks[20].y;
+        const pinkyPIPY = handLandmarks[18].y;
+        const pinkyFolded = pinkyTipY > pinkyPIPY;
+
+        // Determine if it's a thumbs up
+        const thumbsUp = thumbUp && indexFolded && middleFolded && ringFolded && pinkyFolded;
+
+        return thumbsUp;
+    };
+
+    function drawHandCursor(fingerTip) {
+        const overlayCanvas = overlayCanvasRef.current;
+        if (!overlayCanvas) return;
+        const ctx = overlayCanvas.getContext("2d");
+        // Clear the overlay each frame
+        ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+        const x = fingerTip.x * overlayCanvas.width;
+        const y = fingerTip.y * overlayCanvas.height;
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(0, 0, 255, 0.5)";
+        ctx.fill();
+    }
+
+    const startListening = () => {
+        if (!recognition) {
+            alert("Speech recognition is not supported in this browser.");
+            return;
+        }
+
+        recognition.lang = "en-US"; // Set the language
+        recognition.interimResults = false; // Only final results
+        recognition.continuous = false; // Stop after one result
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            setPrompt((prev) => `${prev} ${transcript}`);
+        };
+
+        recognition.start();
+    };
+
     const onResults = (results) => {
         if (!results.multiHandLandmarks) {
             // No hands detected
@@ -98,18 +226,58 @@ function Canvas({ setGeneratedImage }) {
         const handsDetected = results.multiHandLandmarks.length;
         setNumHandsDetected(handsDetected);
 
-        if (handsDetected === 2) {
-            // Two hands detected, enable hand drawing
-            if (inputModeRef.current !== "hand") {
-                console.log("Two hands detected. Switching to hand mode.");
-                setInputMode("hand");
-                inputModeRef.current = "hand"; // Update ref to prevent immediate re-switching
-            }
-
-            // **Use the first hand for drawing**
+        if (handsDetected >= 1) {
             const firstHandLandmarks = results.multiHandLandmarks[0];
             const indexFingerTip = firstHandLandmarks[8];
-            drawWithHand(indexFingerTip);
+            const thumbTip = firstHandLandmarks[4];
+            const dx = indexFingerTip.x - thumbTip.x;
+            const dy = indexFingerTip.y - thumbTip.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const pinchThreshold = 0.03;
+
+            if (handsDetected >= 2) {
+                const secondHandLandmarks = results.multiHandLandmarks[1];
+                if (isHandOpen(secondHandLandmarks)) {
+                    if (distance < pinchThreshold) {
+                        setBrushSize((prev) => prev + 1);
+                    }
+                    if (isThumbsUp(firstHandLandmarks)) {
+                        if (!selectingColor) {
+                            selectingColor = true;
+                            setTimeout(() => {
+                                selectingColor = false;
+                                setCurrentColorIndex((prev) => (prev + 1) % colorPalette.length);
+                            }, 500);
+                        }
+                    }
+                } else {
+                    if (distance < pinchThreshold) {
+                        setBrushSize((prev) => prev - 1);
+                    }
+                }
+            } else {
+                if (inputModeRef.current !== "hand") {
+                    console.log("Two hands detected. Switching to hand mode.");
+                    setInputMode("hand");
+                    inputModeRef.current = "hand"; // Update ref to prevent immediate re-switching
+                }
+
+                // **Use the first hand for drawing**
+
+                // Choose a pinch threshold
+
+                drawHandCursor(indexFingerTip);
+
+                if (distance < pinchThreshold) {
+                    // Pinched: draw
+                    drawWithHand(indexFingerTip);
+                } else {
+                    // Not pinched: stop drawing
+                    handIsDrawingRef.current = false;
+                    handLastPositionRef.current = null;
+                }
+            }
+            // Two hands detected, enable hand drawing
         } else {
             // Less than two hands detected, switch to mouse mode if currently in hand mode
             if (inputModeRef.current === "hand") {
@@ -122,50 +290,28 @@ function Canvas({ setGeneratedImage }) {
         }
     };
 
-    const drawWithHand = (fingerTip) => {
+    function drawWithHand(fingerTip) {
         const canvas = canvasRef.current;
-        if (!canvas) {
-            console.error("Canvas element not found.");
-            return;
-        }
+        if (!canvas) return;
         const ctx = canvas.getContext("2d");
 
-        // **Do not invert the x-coordinate in hand mode**
-        const x = fingerTip.x * canvas.width;
-        const y = fingerTip.y * canvas.height;
-
-        // Debugging logs
-        console.log(`Hand Position: x=${x.toFixed(2)}, y=${y.toFixed(2)}`);
+        // Apply brush size and color
+        ctx.lineWidth = brushSizeRef.current; // <- Make sure brushSize is from state
+        ctx.strokeStyle = colorRef.current; // <- Make sure brushColor is from state
+        ctx.lineCap = "round";
 
         if (!handIsDrawingRef.current) {
-            // Start drawing with hand
             handIsDrawingRef.current = true;
-            handLastPositionRef.current = { x, y };
-            console.log("Hand drawing started.");
-            return; // Do not draw on the first detection to avoid jumping
-        }
-
-        if (handIsDrawingRef.current && handLastPositionRef.current) {
-            ctx.lineWidth = brushSize;
-            ctx.lineCap = "round";
-            ctx.strokeStyle = isEraser ? "#ffffff" : color;
-
+            handLastPositionRef.current = { x: fingerTip.x, y: fingerTip.y };
+        } else {
+            const lastPos = handLastPositionRef.current;
             ctx.beginPath();
-            ctx.moveTo(handLastPositionRef.current.x, handLastPositionRef.current.y);
-            ctx.lineTo(x, y);
+            ctx.moveTo(lastPos.x * canvas.width, lastPos.y * canvas.height);
+            ctx.lineTo(fingerTip.x * canvas.width, fingerTip.y * canvas.height);
             ctx.stroke();
-            ctx.closePath();
-
-            console.log(
-                `Hand Drawn Line: From (${handLastPositionRef.current.x.toFixed(2)}, ${handLastPositionRef.current.y.toFixed(
-                    2
-                )}) to (${x.toFixed(2)}, ${y.toFixed(2)})`
-            );
-
-            // Update the last position
-            handLastPositionRef.current = { x, y };
+            handLastPositionRef.current = { x: fingerTip.x, y: fingerTip.y };
         }
-    };
+    }
 
     const clearCanvas = () => {
         const canvas = canvasRef.current;
@@ -194,6 +340,7 @@ function Canvas({ setGeneratedImage }) {
     };
 
     const handleMouseMove = (e) => {
+        console.log(brushSize);
         if (inputModeRef.current !== "mouse" || !mouseIsDrawing) return; // Only allow mouse drawing in 'mouse' mode
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -265,7 +412,6 @@ function Canvas({ setGeneratedImage }) {
             setGeneratedImage(`data:image/png;base64,${data.generatedImage}`);
 
             console.log("Image generated successfully.");
-            alert("Image generated successfully!");
         } catch (error) {
             console.error("Failed to generate image:", error);
             alert(`Failed to generate image: ${error.message}`);
@@ -348,7 +494,7 @@ function Canvas({ setGeneratedImage }) {
             <video
                 ref={videoRef}
                 style={{
-                    display: "block",
+                    position: "relative",
                     margin: "0 auto 10px",
                     width: "640px",
                     height: "480px",
@@ -360,23 +506,42 @@ function Canvas({ setGeneratedImage }) {
             ></video>
 
             {/* Canvas */}
-            <canvas
-                ref={canvasRef}
-                width={640}
-                height={480}
-                style={{
-                    border: inputMode === "hand" ? "3px solid blue" : "1px solid #000", // Change border color based on mode
-                    cursor: "crosshair",
-                    backgroundColor: "#ffffff",
-                    transform: "scaleX(-1)", // Conditionally flip the canvas
-                    display: "block",
-                    margin: "0 auto 10px",
-                }}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-            />
+            <div style={{ position: "relative", height: "480px" }}>
+                <canvas
+                    ref={canvasRef}
+                    width={640}
+                    height={480}
+                    style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        border: inputMode === "hand" ? "3px solid blue" : "1px solid #000", // Change border color based on mode
+                        cursor: "crosshair",
+                        backgroundColor: "#ffffff",
+                        transform: "scaleX(-1)", // Conditionally flip the canvas
+                        display: "block",
+                        margin: "0 auto 10px",
+                    }}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                />
+                <canvas
+                    ref={overlayCanvasRef}
+                    // cursor overlay canvas
+                    width={640}
+                    height={480}
+                    style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        pointerEvents: "none",
+                        transform: "scaleX(-1)",
+                        margin: "0 auto 10px",
+                    }}
+                />
+            </div>
 
             {/* Status Display */}
             <div>
@@ -389,32 +554,48 @@ function Canvas({ setGeneratedImage }) {
                 <label htmlFor="prompt" style={{ display: "block", marginBottom: "5px" }}>
                     Enter Prompt:
                 </label>
-                <input
-                    type="text"
-                    id="prompt"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="Type your prompt here..."
-                    style={{
-                        width: "100%",
-                        padding: "8px",
-                        boxSizing: "border-box",
-                        marginBottom: "10px",
-                    }}
-                />
-                <button
-                    onClick={handleSubmit}
-                    disabled={isSubmitting}
-                    style={{
-                        padding: "10px 20px",
-                        backgroundColor: "#4CAF50",
-                        color: "white",
-                        border: "none",
-                        cursor: "pointer",
-                    }}
-                >
-                    {isSubmitting ? "Submitting..." : "Generate Image"}
-                </button>
+                <div style={{ display: "flex", alignItems: "flex-start" }}>
+                    <button
+                        type="button"
+                        onClick={startListening}
+                        style={{
+                            padding: "4px 12px",
+                            backgroundColor: isListening ? "#f0ad4e" : "#007bff",
+                            color: "white",
+                            border: "none",
+                            cursor: "pointer",
+                        }}
+                    >
+                        {isListening ? "Listening..." : "Start Listening"}
+                    </button>
+                    <input
+                        type="text"
+                        id="prompt"
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="Type your prompt here..."
+                        style={{
+                            width: "100%",
+                            padding: "10px",
+                            boxSizing: "border-box",
+                            marginBottom: "10px",
+                            marginRight: "10px",
+                        }}
+                    />
+                    <button
+                        onClick={handleSubmit}
+                        disabled={isSubmitting}
+                        style={{
+                            padding: "5px 20px",
+                            backgroundColor: "#4CAF50",
+                            color: "white",
+                            border: "none",
+                            cursor: "pointer",
+                        }}
+                    >
+                        {isSubmitting ? "Submitting..." : "Generate Image"}
+                    </button>
+                </div>
             </div>
         </div>
     );
