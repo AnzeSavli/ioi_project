@@ -20,12 +20,6 @@ cd ./my-replicate-app
 REPLICATE_API_TOKEN=YOUR_TOKEN_GOES_HERE
 ```
 
-for testing use this token instead:
-
-```console
-REPLICATE_API_TOKEN=r8_6iDOSRVTm88XzUJOx0Ew8MD3Ao7wk013Ullsk
-```
-
 -   Start backend server:
 
 ```console
